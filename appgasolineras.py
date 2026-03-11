@@ -93,24 +93,34 @@ if boton_buscar:
                                 })
                     except: continue
 
+                # --- PARTE DE LA GRÁFICA CORREGIDA ---
                 if not resultados:
                     st.warning("No se encontraron gasolineras en ese radio.")
                 else:
-                    # Crear DataFrame para mostrar tabla
+                    # 1. Crear el DataFrame
                     df = pd.DataFrame(resultados).sort_values("Precio").head(15)
-                    
-                    # Mostrar métricas rápidas
+    
+                    # 2. CREAR ETIQUETA ÚNICA: Combinamos Rótulo y Dirección para evitar que se sumen
+                    # Esto evita que dos "REPSOL" se fusionen en una sola barra.
+                    df['Etiqueta'] = df['Rótulo'] + " (" + df['Dirección'].str[:15] + "...)"
+
+                    # 3. Mostrar métricas
                     col1, col2 = st.columns(2)
                     col1.metric("Más barata", f"{df['Precio'].min()} €/L")
                     col2.metric("Media zona", f"{round(df['Precio'].mean(), 3)} €/L")
                     
-                    # Mostrar Tabla
-                    st.success(f"Encontradas {len(df)} gasolineras baratas:")
-                    st.dataframe(df, use_container_width=True)
+                    st.success(f"Top {len(df)} gasolineras más económicas:")
                     
-                    # Gráfica rápida
-                    st.subheader("Variación de precio en el Top 15")
-                    st.bar_chart(df, x="Rótulo", y="Precio")
+                    # Mostramos la tabla (aquí puedes dejar las columnas originales)
+                    st.dataframe(df[["Precio", "Distancia (km)", "Rótulo", "Municipio", "Dirección"]], use_container_width=True)
+                    
+                    # 4. GRÁFICA CORREGIDA: Usamos la nueva 'Etiqueta' única para el eje X
+                    st.subheader("Comparativa de precios individuales")
+                    
+                    # Usamos st.bar_chart especificando la columna única
+                    # Nota: y="Precio" asegura que la altura sea el valor real, no la suma.
+                    st.bar_chart(df, x="Etiqueta", y="Precio")
+                
 
             except Exception as e:
                 st.error(f"Error al conectar con el Ministerio: {e}")
