@@ -84,7 +84,7 @@ def distancia_km(lat1, lon1, lat2, lon2) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 # 4. INTERFAZ DE USUARIO
-st.title("⛽ Gasolineras Pro")
+st.title("⛽ Gasolineras")
 
 modo_ubicacion = st.radio("Buscar por:", ["Dirección", "GPS Real"], horizontal=True)
 
@@ -178,4 +178,5 @@ if st.session_state.resultados_busqueda is not None:
     st.subheader("📊 Comparativa")
     df['Etiqueta'] = df['Ranking'].astype(str) + ". " + df['Rótulo']
     st.bar_chart(df, x="Etiqueta", y="Precio")
+
 
