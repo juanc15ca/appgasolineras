@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as st  # IMPORTANTE: Siempre la primera línea
 import math
 import ssl
 import json
@@ -8,11 +8,17 @@ import urllib.request
 import pandas as pd
 from datetime import datetime
 
-# Configuración de página para móvil
-st.set_page_config(page_title="Gasolineras Baratas", page_icon="⛽", layout="centered")
+# 1. CONFIGURACIÓN DE LA PÁGINA
+st.set_page_config(page_title="Gasolineras Pro", page_icon="⛽", layout="centered")
 
-# --- FUNCIONES DE LÓGICA (Tus funciones originales adaptadas) ---
+# 2. INICIALIZACIÓN DE MEMORIA (Session State)
+# Esto evita que la ubicación se borre al pulsar el botón de buscar
+if 'lat' not in st.session_state:
+    st.session_state.lat = None
+if 'lon' not in st.session_state:
+    st.session_state.lon = None
 
+# 3. FUNCIONES LÓGICAS
 def get_json_ministerio(path: str) -> dict:
     host = "sedeaplicaciones.minetur.gob.es"
     ctx = ssl.create_default_context()
@@ -45,85 +51,97 @@ def distancia_km(lat1, lon1, lat2, lon2) -> float:
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     return R * 2 * math.asin(math.sqrt(a))
 
-# --- INTERFAZ DE USUARIO CON STREAMLIT ---
+# 4. INTERFAZ DE USUARIO
+st.title("⛽ Buscador de Gasolineras Pro")
+st.markdown("Precios oficiales actualizados del Ministerio.")
 
-st.title("🔍 Buscador de Gasolineras")
-st.markdown("Consulta precios oficiales del Ministerio en tiempo real.")
+# Selector de ubicación
+modo_ubicacion = st.radio("Selecciona cómo buscar:", ["Escribir dirección", "Manual / GPS"])
 
-# Formulario de búsqueda
-with st.form("buscador"):
+if modo_ubicacion == "Escribir dirección":
     direccion_input = st.text_input("📍 Ubicación:", value="Avenida Doctor Fedriani 47, Sevilla")
-    radio_input = st.slider("📏 Radio de búsqueda (km):", min_value=1, max_value=20, value=5)
-    combustible_opcion = st.selectbox("⛽ Combustible:", 
-                                     ["Precio Gasoleo A", "Precio Gasolina 95 E5"],
-                                     format_func=lambda x: "Diésel" if "Gasoleo" in x else "Gasolina 95")
-    boton_buscar = st.form_submit_button("Buscar las más baratas")
-
-if boton_buscar:
-    with st.spinner("Geocodificando y descargando precios..."):
+    if st.button("📍 Fijar Dirección"):
         coords = geocodificar(direccion_input)
-        
-        if not coords:
-            st.error("No se pudo encontrar la dirección. Intenta ser más específico.")
+        if coords:
+            st.session_state.lat, st.session_state.lon = coords
+            st.success(f"✅ Ubicación fijada: {st.session_state.lat}, {st.session_state.lon}")
         else:
-            lat_usr, lon_usr = coords
-            
+            st.error("No se encontró la dirección.")
+else:
+    st.info("Introduce coordenadas manualmente:")
+    c1, c2 = st.columns(2)
+    st.session_state.lat = c1.number_input("Latitud:", value=st.session_state.lat if st.session_state.lat else 37.413, format="%.5f")
+    st.session_state.lon = c2.number_input("Longitud:", value=st.session_state.lon if st.session_state.lon else -5.978, format="%.5f")
+
+st.divider()
+
+# Parámetros de búsqueda
+radio_input = st.slider("📏 Radio de búsqueda (km):", 1, 30, 5)
+combustible_opcion = st.selectbox("⛽ Combustible:", 
+                                 ["Precio Gasoleo A", "Precio Gasolina 95 E5"],
+                                 format_func=lambda x: "Diésel" if "Gasoleo" in x else "Gasolina 95")
+
+
+# 5. EJECUCIÓN DE BÚSQUEDA
+if st.button("🚀 BUSCAR LAS MÁS BARATAS"):
+    if st.session_state.lat and st.session_state.lon:
+        with st.spinner("Consultando precios en tiempo real..."):
             try:
-                # Descarga de datos
                 data = get_json_ministerio("/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/")
                 gasolineras = data.get("ListaEESSPrecio", [])
                 
-                # Filtrado y cálculo
                 resultados = []
                 for g in gasolineras:
                     try:
                         g_lat = float(g["Latitud"].replace(",", "."))
                         g_lon = float(g["Longitud (WGS84)"].replace(",", "."))
-                        dist = distancia_km(lat_usr, lon_usr, g_lat, g_lon)
+                        dist = distancia_km(st.session_state.lat, st.session_state.lon, g_lat, g_lon)
                         
                         if dist <= radio_input:
                             precio_str = g.get(combustible_opcion, "").replace(",", ".")
                             if precio_str:
                                 resultados.append({
                                     "Precio": float(precio_str),
-                                    "Distancia (km)": round(dist, 2),
+                                    "Distancia": round(dist, 2),
                                     "Rótulo": g.get("Rótulo"),
-                                    "Municipio": g.get("Municipio"),
-                                    "Dirección": g.get("Dirección")
+                                    "Dirección": g.get("Dirección"),
+                                    "lat": g_lat,
+                                    "lon": g_lon,
+                                    "Maps": f"https://www.google.com/maps/dir/?api=1&destination={g_lat},{g_lon}"
                                 })
                     except: continue
 
-                # --- PARTE DE LA GRÁFICA CORREGIDA ---
-                if not resultados:
-                    st.warning("No se encontraron gasolineras en ese radio.")
-                else:
-                    # 1. Crear el DataFrame
+                if resultados:
                     df = pd.DataFrame(resultados).sort_values("Precio").head(15)
-    
-                    # 2. CREAR ETIQUETA ÚNICA: Combinamos Rótulo y Dirección para evitar que se sumen
-                    # Esto evita que dos "REPSOL" se fusionen en una sola barra.
-                    df['Etiqueta'] = df['Rótulo'] + " (" + df['Dirección'].str[:15] + "...)"
+                    df['Etiqueta'] = df['Rótulo'] + " (" + df['Dirección'].str[:10] + ")"
 
-                    # 3. Mostrar métricas
-                    col1, col2 = st.columns(2)
-                    col1.metric("Más barata", f"{df['Precio'].min()} €/L")
-                    col2.metric("Media zona", f"{round(df['Precio'].mean(), 3)} €/L")
-                    
-                    st.success(f"Top {len(df)} gasolineras más económicas:")
-                    
-                    # Mostramos la tabla (aquí puedes dejar las columnas originales)
-                    st.dataframe(df[["Precio", "Distancia (km)", "Rótulo", "Municipio", "Dirección"]], use_container_width=True)
-                    
-                    # 4. GRÁFICA CORREGIDA: Usamos la nueva 'Etiqueta' única para el eje X
-                    st.subheader("Comparativa de precios individuales")
-                    
-                    # Usamos st.bar_chart especificando la columna única
-                    # Nota: y="Precio" asegura que la altura sea el valor real, no la suma.
+                    # 1. MÉTRICAS (Arriba del todo para resumen rápido)
+                    m1, m2 = st.columns(2)
+                    m1.metric("Precio Mínimo", f"{df['Precio'].min()} €")
+                    m2.metric("Ahorro medio", f"{round(df['Precio'].mean() - df['Precio'].min(), 3)} €")
+
+                    st.divider()
+
+                    # 2. LISTADO DETALLADO (Lo primero que pediste)
+                    st.subheader("📋 Listado de las 15 más baratas")
+                    st.dataframe(
+                        df[["Precio", "Distancia", "Rótulo", "Dirección", "Maps"]],
+                        column_config={"Maps": st.column_config.LinkColumn("📍 Ir en Maps")},
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    # 3. MAPA (Debajo del listado)
+                    st.subheader("📍 Ubicación en el mapa")
+                    st.map(df[['lat', 'lon']])
+
+                    # 4. GRÁFICA (Al final)
+                    st.subheader("📊 Comparativa visual de precios")
                     st.bar_chart(df, x="Etiqueta", y="Precio")
-                
-
+                    
+                else:
+                    st.warning("No hay gasolineras en ese radio. Prueba a aumentarlo.")
             except Exception as e:
-                st.error(f"Error al conectar con el Ministerio: {e}")
-
-st.divider()
-st.caption(f"Datos actualizados: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+                st.error(f"Error en la conexión con el Ministerio: {e}")
+    else:
+        st.error("⚠️ Primero debes fijar una ubicación arriba.")
