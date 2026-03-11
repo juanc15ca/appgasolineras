@@ -1,4 +1,4 @@
-import streamlit as st  # IMPORTANTE: Siempre la primera línea
+import streamlit as st
 import math
 import ssl
 import json
@@ -7,16 +7,20 @@ import urllib.parse
 import urllib.request
 import pandas as pd
 from datetime import datetime
+import folium
+from streamlit_folium import st_folium
+from streamlit_js_eval import get_geolocation
 
 # 1. CONFIGURACIÓN DE LA PÁGINA
 st.set_page_config(page_title="Gasolineras Pro", page_icon="⛽", layout="centered")
 
 # 2. INICIALIZACIÓN DE MEMORIA (Session State)
-# Esto evita que la ubicación se borre al pulsar el botón de buscar
 if 'lat' not in st.session_state:
     st.session_state.lat = None
 if 'lon' not in st.session_state:
     st.session_state.lon = None
+if 'resultados_busqueda' not in st.session_state:
+    st.session_state.resultados_busqueda = None
 
 # 3. FUNCIONES LÓGICAS
 def get_json_ministerio(path: str) -> dict:
@@ -53,39 +57,50 @@ def distancia_km(lat1, lon1, lat2, lon2) -> float:
 
 # 4. INTERFAZ DE USUARIO
 st.title("⛽ Buscador de Gasolineras Pro")
-st.markdown("Precios oficiales actualizados del Ministerio.")
 
-# Selector de ubicación
-modo_ubicacion = st.radio("Selecciona cómo buscar:", ["Escribir dirección", "Manual / GPS"])
+modo_ubicacion = st.radio("Selecciona cómo buscar:", ["Escribir dirección", "GPS en Tiempo Real"])
 
 if modo_ubicacion == "Escribir dirección":
     direccion_input = st.text_input("📍 Ubicación:", value="Avenida Doctor Fedriani 47, Sevilla")
-    if st.button("📍 Fijar Dirección"):
+    if st.button("📍 Fijar Ubicación"):
         coords = geocodificar(direccion_input)
         if coords:
             st.session_state.lat, st.session_state.lon = coords
-            st.success(f"✅ Ubicación fijada: {st.session_state.lat}, {st.session_state.lon}")
+            st.success(f"✅ Dirección fijada")
         else:
             st.error("No se encontró la dirección.")
+
 else:
-    st.info("Introduce coordenadas manualmente:")
-    c1, c2 = st.columns(2)
-    st.session_state.lat = c1.number_input("Latitud:", value=st.session_state.lat if st.session_state.lat else 37.413, format="%.5f")
-    st.session_state.lon = c2.number_input("Longitud:", value=st.session_state.lon if st.session_state.lon else -5.978, format="%.5f")
+    st.info("Obteniendo posición del sensor GPS...")
+    # Solicita ubicación al navegador
+    loc = get_geolocation()
+    
+    if loc:
+        st.session_state.lat = loc['coords']['latitude']
+        st.session_state.lon = loc['coords']['longitude']
+        st.success("📍 GPS Conectado")
+    else:
+        st.warning("Esperando señal GPS... (Asegúrate de dar permisos en el móvil)")
+    
+    if st.button("🔄 Actualizar mi posición"):
+        st.rerun()
+
+# Mostrar coordenadas actuales (solo lectura para confirmar)
+if st.session_state.lat:
+    st.caption(f"Coordenadas actuales: {st.session_state.lat}, {st.session_state.lon}")
 
 st.divider()
 
-# Parámetros de búsqueda
+# Parámetros
 radio_input = st.slider("📏 Radio de búsqueda (km):", 1, 30, 5)
 combustible_opcion = st.selectbox("⛽ Combustible:", 
                                  ["Precio Gasoleo A", "Precio Gasolina 95 E5"],
                                  format_func=lambda x: "Diésel" if "Gasoleo" in x else "Gasolina 95")
 
-
-# 5. EJECUCIÓN DE BÚSQUEDA
+# 5. BOTÓN DE BÚSQUEDA
 if st.button("🚀 BUSCAR LAS MÁS BARATAS"):
     if st.session_state.lat and st.session_state.lon:
-        with st.spinner("Consultando precios en tiempo real..."):
+        with st.spinner("Consultando precios oficiales..."):
             try:
                 data = get_json_ministerio("/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/")
                 gasolineras = data.get("ListaEESSPrecio", [])
@@ -106,42 +121,62 @@ if st.button("🚀 BUSCAR LAS MÁS BARATAS"):
                                     "Rótulo": g.get("Rótulo"),
                                     "Dirección": g.get("Dirección"),
                                     "lat": g_lat,
-                                    "lon": g_lon,
-                                    "Maps": f"https://www.google.com/maps/dir/?api=1&destination={g_lat},{g_lon}"
+                                    "lon": g_lon
                                 })
                     except: continue
 
                 if resultados:
-                    df = pd.DataFrame(resultados).sort_values("Precio").head(15)
-                    df['Etiqueta'] = df['Rótulo'] + " (" + df['Dirección'].str[:10] + ")"
-
-                    # 1. MÉTRICAS (Arriba del todo para resumen rápido)
-                    m1, m2 = st.columns(2)
-                    m1.metric("Precio Mínimo", f"{df['Precio'].min()} €")
-                    m2.metric("Ahorro medio", f"{round(df['Precio'].mean() - df['Precio'].min(), 3)} €")
-
-                    st.divider()
-
-                    # 2. LISTADO DETALLADO (Lo primero que pediste)
-                    st.subheader("📋 Listado de las 15 más baratas")
-                    st.dataframe(
-                        df[["Precio", "Distancia", "Rótulo", "Dirección", "Maps"]],
-                        column_config={"Maps": st.column_config.LinkColumn("📍 Ir en Maps")},
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                    # 3. MAPA (Debajo del listado)
-                    st.subheader("📍 Ubicación en el mapa")
-                    st.map(df[['lat', 'lon']])
-
-                    # 4. GRÁFICA (Al final)
-                    st.subheader("📊 Comparativa visual de precios")
-                    st.bar_chart(df, x="Etiqueta", y="Precio")
-                    
+                    df = pd.DataFrame(resultados).sort_values("Precio").head(15).reset_index(drop=True)
+                    df['Ranking'] = df.index + 1
+                    df['Maps'] = df.apply(lambda r: f"https://www.google.com/maps/dir/?api=1&destination={r['lat']},{r['lon']}", axis=1)
+                    st.session_state.resultados_busqueda = df
                 else:
-                    st.warning("No hay gasolineras en ese radio. Prueba a aumentarlo.")
+                    st.session_state.resultados_busqueda = None
+                    st.warning("No hay gasolineras cerca.")
             except Exception as e:
-                st.error(f"Error en la conexión con el Ministerio: {e}")
+                st.error(f"Error: {e}")
     else:
-        st.error("⚠️ Primero debes fijar una ubicación arriba.")
+        st.error("⚠️ No hay ubicación fijada.")
+
+# 6. RESULTADOS
+if st.session_state.resultados_busqueda is not None:
+    df = st.session_state.resultados_busqueda
+    
+    # Métricas
+    m1, m2 = st.columns(2)
+    m1.metric("Mínimo", f"{df['Precio'].min()} €")
+    m2.metric("Ahorro", f"{round(df['Precio'].mean() - df['Precio'].min(), 3)} €")
+
+    # A. LISTADO
+    st.subheader("📋 Las 15 más baratas")
+    st.dataframe(
+        df[["Ranking", "Precio", "Distancia", "Rótulo", "Dirección", "Maps"]],
+        column_config={"Maps": st.column_config.LinkColumn("📍 Navegar")},
+        use_container_width=True, hide_index=True
+    )
+
+    # B. MAPA NUMERADO
+    st.subheader("📍 Mapa interactivo")
+    m = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13, scrollWheelZoom=False)
+    
+    # Marcador Usuario
+    folium.Marker([st.session_state.lat, st.session_state.lon], 
+                  popup="Estás aquí", icon=folium.Icon(color='red')).add_to(m)
+
+    # Gasolineras
+    for i, row in df.iterrows():
+        folium.Marker(
+            location=[row['lat'], row['lon']],
+            icon=folium.DivIcon(html=f"""
+                <div style="font-family: Arial; color: white; background-color: #007bff; 
+                border-radius: 50%; width: 24px; height: 24px; display: flex; 
+                align-items: center; justify-content: center; font-weight: bold; 
+                border: 2px solid white;">{row['Ranking']}</div>""")
+        ).add_to(m)
+    
+    st_folium(m, width=700, height=450)
+
+    # C. GRÁFICA
+    st.subheader("📊 Gráfica de precios")
+    df['Etiqueta'] = df['Ranking'].astype(str) + ". " + df['Rótulo']
+    st.bar_chart(df, x="Etiqueta", y="Precio")
