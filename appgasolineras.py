@@ -12,7 +12,7 @@ from streamlit_folium import st_folium
 from streamlit_js_eval import get_geolocation
 
 # 1. CONFIGURACIÓN DE LA PÁGINA
-st.set_page_config(page_title="Gasolineras Pro", page_icon="⛽", layout="centered")
+st.set_page_config(page_title="Gasolineras", page_icon="⛽", layout="centered")
 
 # --- BLOQUE DE ESTILO CSS PARA COMPACTAR ---
 st.markdown("""
@@ -178,3 +178,4 @@ if st.session_state.resultados_busqueda is not None:
     st.subheader("📊 Comparativa")
     df['Etiqueta'] = df['Ranking'].astype(str) + ". " + df['Rótulo']
     st.bar_chart(df, x="Etiqueta", y="Precio")
+
